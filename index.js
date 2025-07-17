@@ -588,7 +588,7 @@ function evaluateGuess(guess, targetWord) {
   const result = new Array(5);
   const targetArray = targetWord.split("");
   const guessArray = guess.split("");
-
+  console.log(targetWord);
   // First pass: mark correct letters
   for (let i = 0; i < 5; i++) {
     if (guessArray[i] === targetArray[i]) {
@@ -628,7 +628,7 @@ function createGameStateForPlayer(room, playerId) {
     myGuessStates: room.playerGuessStates.get(playerId) || [],
   };
 
-  // For each player, only show guess states (not actual words) unless it's the current player
+  // For each player, show guess states
   room.players.forEach((pid) => {
     const guesses = room.playerGuesses.get(pid) || [];
     const states = room.playerGuessStates.get(pid) || [];
@@ -636,6 +636,15 @@ function createGameStateForPlayer(room, playerId) {
     gameState.playerGuessStates[pid] = states;
     gameState.playerGuessesCount[pid] = guesses.length;
   });
+
+  // When game is over, reveal all players' actual guesses
+  if (room.gameOver) {
+    gameState.playerGuesses = {};
+    room.players.forEach((pid) => {
+      const guesses = room.playerGuesses.get(pid) || [];
+      gameState.playerGuesses[pid] = guesses;
+    });
+  }
 
   return gameState;
 }
@@ -939,7 +948,8 @@ io.on("connection", (socket) => {
           // If game was in progress, end it
           if (room.gameStarted && !room.gameOver) {
             room.gameOver = true;
-            room.winner = room.players[0]; // Remaining player wins
+            room.winner = null; // No winner when someone quits
+            room.quitReason = "opponent_quit"; // Mark reason for game end
 
             const remainingPlayerId = room.players[0];
             const remainingSocket = io.sockets.sockets.get(remainingPlayerId);
@@ -948,6 +958,7 @@ io.on("connection", (socket) => {
                 room,
                 remainingPlayerId
               );
+              gameState.quitReason = "opponent_quit"; // Add quit reason to game state
               remainingSocket.emit("gameOver", gameState);
             }
           }
