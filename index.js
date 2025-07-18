@@ -865,10 +865,10 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Restart game (only host can restart)
+  // Restart game (either player can restart)
   socket.on("restartGame", () => {
     const player = players.get(socket.id);
-    if (!player || !player.isHost) return;
+    if (!player) return;
 
     const room = rooms.get(player.roomId);
     if (!room) return;
