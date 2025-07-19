@@ -963,10 +963,15 @@ io.on("connection", (socket) => {
                 gameState.quitReason = "opponent_quit";
                 remainingSocket.emit("gameOver", gameState);
               } else {
-                // Game is in progress - force return home
-                remainingSocket.emit("forceReturnHome", {
-                  message: "Your opponent left the game",
-                });
+                // Game is in progress - end the game and show dialog with quit reason
+                room.gameOver = true;
+                room.winner = remainingPlayerId; // Remaining player wins
+                const gameState = createGameStateForPlayer(
+                  room,
+                  remainingPlayerId
+                );
+                gameState.quitReason = "opponent_quit";
+                remainingSocket.emit("gameOver", gameState);
               }
             }
           }
