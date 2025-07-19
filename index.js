@@ -923,16 +923,20 @@ io.on("connection", (socket) => {
     });
   });
 
-  // Handle disconnection
-  socket.on("disconnect", () => {
-    console.log(`User disconnected: ${socket.id}`);
+  // Handle explicit leave room (when clicking "Return Home")
+  socket.on("leaveRoom", () => {
+    console.log(`User explicitly left room: ${socket.id}`);
+    handlePlayerLeaving(socket.id, "quit");
+  });
 
-    const player = players.get(socket.id);
+  // Shared function to handle player leaving (disconnect or explicit leave)
+  function handlePlayerLeaving(playerId, reason = "disconnect") {
+    const player = players.get(playerId);
     if (player) {
       const room = rooms.get(player.roomId);
       if (room) {
         // Remove player from room
-        room.players = room.players.filter((p) => p !== socket.id);
+        room.players = room.players.filter((p) => p !== playerId);
 
         if (room.players.length === 0) {
           // Room is empty, delete it
@@ -941,32 +945,42 @@ io.on("connection", (socket) => {
         } else {
           // Notify remaining players
           io.to(player.roomId).emit("playerLeft", {
-            playerId: socket.id,
+            playerId: playerId,
             playerCount: room.players.length,
           });
 
-          // If game was in progress, end it
-          if (room.gameStarted && !room.gameOver) {
-            room.gameOver = true;
-            room.winner = null; // No winner when someone quits
-            room.quitReason = "opponent_quit"; // Mark reason for game end
-
+          // If game was started (whether in progress or finished), handle opponent leaving
+          if (room.gameStarted) {
             const remainingPlayerId = room.players[0];
             const remainingSocket = io.sockets.sockets.get(remainingPlayerId);
             if (remainingSocket) {
-              const gameState = createGameStateForPlayer(
-                room,
-                remainingPlayerId
-              );
-              gameState.quitReason = "opponent_quit"; // Add quit reason to game state
-              remainingSocket.emit("gameOver", gameState);
+              if (room.gameOver) {
+                // Game is finished - send gameOver event with quit reason to update dialog
+                const gameState = createGameStateForPlayer(
+                  room,
+                  remainingPlayerId
+                );
+                gameState.quitReason = "opponent_quit";
+                remainingSocket.emit("gameOver", gameState);
+              } else {
+                // Game is in progress - force return home
+                remainingSocket.emit("forceReturnHome", {
+                  message: "Your opponent left the game",
+                });
+              }
             }
           }
         }
       }
 
-      players.delete(socket.id);
+      players.delete(playerId);
     }
+  }
+
+  // Handle disconnection
+  socket.on("disconnect", () => {
+    console.log(`User disconnected: ${socket.id}`);
+    handlePlayerLeaving(socket.id, "disconnect");
   });
 });
 
