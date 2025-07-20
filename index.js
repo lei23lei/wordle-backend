@@ -26,7 +26,7 @@ const players = new Map();
 
 // Generate random room ID
 function generateRoomId() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
+  return Math.random().toString(36).substring(2, 8).toLowerCase();
 }
 
 // Get a random word for the game
