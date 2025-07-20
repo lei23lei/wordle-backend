@@ -26,7 +26,7 @@ const players = new Map();
 
 // Generate random room ID (numbers only)
 function generateRoomId() {
-  return Math.floor(Math.random() * 900000) + 100000; // 6-digit number (100000-999999)
+  return String(Math.floor(Math.random() * 900000) + 100000); // 6-digit string (100000-999999)
 }
 
 // Get a random word for the game
@@ -128,7 +128,7 @@ io.on("connection", (socket) => {
 
   // Create a new room
   socket.on("createRoom", (callback) => {
-    const roomId = generateRoomId();
+    const roomId = generateRoomId(); // Now returns a string
     const word = getRandomWord();
 
     rooms.set(roomId, {
@@ -156,8 +156,18 @@ io.on("connection", (socket) => {
 
   // Join an existing room
   socket.on("joinRoom", (roomId, callback) => {
-    // Convert roomId to string to handle type mismatch
+    // Convert roomId to string and validate it's a 6-digit number
     const roomIdStr = String(roomId);
+
+    // Validate that roomId is a valid 6-digit number
+    if (!/^\d{6}$/.test(roomIdStr)) {
+      callback({
+        success: false,
+        error: "Invalid room ID. Must be a 6-digit number.",
+      });
+      return;
+    }
+
     const room = rooms.get(roomIdStr);
 
     if (!room) {
