@@ -24,9 +24,9 @@ app.use(express.json());
 const rooms = new Map();
 const players = new Map();
 
-// Generate random room ID
+// Generate random room ID (numbers only)
 function generateRoomId() {
-  return Math.random().toString(36).substring(2, 8).toLowerCase();
+  return Math.floor(Math.random() * 900000) + 100000; // 6-digit number (100000-999999)
 }
 
 // Get a random word for the game
