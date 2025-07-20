@@ -11,7 +11,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "*", // In production, replace with your frontend URL
+    origin: process.env.FRONTEND_URL || "http://localhost:3000", // In production, replace with your frontend URL
     methods: ["GET", "POST"],
   },
 });
