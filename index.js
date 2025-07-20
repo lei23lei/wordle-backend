@@ -156,7 +156,9 @@ io.on("connection", (socket) => {
 
   // Join an existing room
   socket.on("joinRoom", (roomId, callback) => {
-    const room = rooms.get(roomId);
+    // Convert roomId to string to handle type mismatch
+    const roomIdStr = String(roomId);
+    const room = rooms.get(roomIdStr);
 
     if (!room) {
       callback({ success: false, error: "Room not found" });
@@ -177,20 +179,20 @@ io.on("connection", (socket) => {
     room.players.push(socket.id);
     players.set(socket.id, {
       id: socket.id,
-      roomId: roomId,
+      roomId: roomIdStr,
       isHost: false,
     });
 
-    socket.join(roomId);
+    socket.join(roomIdStr);
 
     // Notify all players in the room
-    io.to(roomId).emit("playerJoined", {
+    io.to(roomIdStr).emit("playerJoined", {
       playerId: socket.id,
       playerCount: room.players.length,
     });
 
-    console.log(`Player ${socket.id} joined room ${roomId}`);
-    callback({ success: true, roomId: roomId });
+    console.log(`Player ${socket.id} joined room ${roomIdStr}`);
+    callback({ success: true, roomId: roomIdStr });
   });
 
   // Start the game
