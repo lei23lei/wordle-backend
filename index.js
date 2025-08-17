@@ -23,6 +23,7 @@ app.use(express.json());
 // Game state management
 const rooms = new Map();
 const players = new Map();
+const playerLocks = new Map(); // Track players currently processing guesses
 
 // Generate random room ID (numbers only)
 function generateRoomId() {
@@ -45,13 +46,28 @@ async function isValidWord(word) {
 
   // If not in local list, check API
   try {
+    // Use dynamic import for fetch compatibility
+    const { default: fetch } = await import("node-fetch").catch(() => ({
+      default: global.fetch,
+    }));
+
+    if (!fetch) {
+      console.warn(
+        "Neither native fetch nor node-fetch available, using local validation only"
+      );
+      return false;
+    }
+
     const response = await fetch(
       `https://api.dictionaryapi.dev/api/v2/entries/en/${wordStr.toLowerCase()}`
     );
     return response.ok;
-  } catch {
+  } catch (error) {
     // If API fails, fall back to local list only
-    console.warn("Dictionary API failed, using local validation only");
+    console.warn(
+      "Dictionary API failed, using local validation only:",
+      error.message
+    );
     return false;
   }
 }
@@ -246,107 +262,138 @@ io.on("connection", (socket) => {
     const room = rooms.get(player.roomId);
     if (!room || !room.gameStarted || room.gameOver) return;
 
-    // Validate guess (5 letters)
-    if (guess.length !== 5 || !/^[A-Z]+$/.test(guess)) {
-      socket.emit("error", { message: "Invalid guess. Must be 5 letters." });
-      return;
-    }
-
-    // Check if player already has 6 guesses
-    const currentGuesses = room.playerGuesses.get(socket.id) || [];
-    if (currentGuesses.length >= 6) {
-      socket.emit("error", { message: "You have already used all 6 guesses." });
-      return;
-    }
-
-    // Validate word exists
-    const isValid = await isValidWord(guess);
-    if (!isValid) {
-      socket.emit("error", { message: "Not in dictionary" });
-      return;
-    }
-
-    // Add guess to player's history
-    const playerGuesses = room.playerGuesses.get(socket.id) || [];
-    const playerGuessStates = room.playerGuessStates.get(socket.id) || [];
-
-    playerGuesses.push(guess);
-    const evaluation = evaluateGuess(guess, room.word);
-    playerGuessStates.push(evaluation);
-
-    room.playerGuesses.set(socket.id, playerGuesses);
-    room.playerGuessStates.set(socket.id, playerGuessStates);
-
-    console.log(
-      `Player ${socket.id} guessed "${guess}" for word "${room.word}"`
-    );
-
-    // Check if guess is correct
-    const isCorrect = evaluation.every((state) => state === "correct");
-
-    if (isCorrect) {
-      // Game over - this player wins
-      room.gameOver = true;
-      room.winner = socket.id;
-
-      // Send game over event to all players with full game state
-      room.players.forEach((playerId) => {
-        const playerSocket = io.sockets.sockets.get(playerId);
-        if (playerSocket) {
-          const gameState = createGameStateForPlayer(room, playerId);
-          playerSocket.emit("gameOver", gameState);
-        }
+    // Check if player is already processing a guess (prevent race conditions)
+    if (playerLocks.has(socket.id)) {
+      socket.emit("error", {
+        message: "Please wait for previous guess to process",
       });
+      return;
+    }
 
-      console.log(`Game over in room ${room.id}. Winner: ${socket.id}`);
-    } else {
-      // Check if this player has used all 6 guesses
-      if (playerGuesses.length >= 6) {
-        // Check if other player has also finished or used all guesses
-        const otherPlayer = room.players.find((p) => p !== socket.id);
-        const otherPlayerGuesses = room.playerGuesses.get(otherPlayer) || [];
-        const otherPlayerStates = room.playerGuessStates.get(otherPlayer) || [];
+    // Lock this player from submitting more guesses
+    playerLocks.set(socket.id, true);
 
-        // Check if other player won
-        const otherPlayerWon = otherPlayerStates.some((states) =>
-          states.every((state) => state === "correct")
-        );
-
-        if (otherPlayerGuesses.length >= 6 || otherPlayerWon) {
-          // Both players finished - determine winner or tie
-          room.gameOver = true;
-
-          if (otherPlayerWon) {
-            room.winner = otherPlayer;
-          } else {
-            room.winner = null; // Tie
-          }
-
-          // Send game over event to all players
-          room.players.forEach((playerId) => {
-            const playerSocket = io.sockets.sockets.get(playerId);
-            if (playerSocket) {
-              const gameState = createGameStateForPlayer(room, playerId);
-              playerSocket.emit("gameOver", gameState);
-            }
-          });
-
-          console.log(
-            `Game over in room ${room.id}. Winner: ${room.winner || "Tie"}`
-          );
-        }
+    try {
+      // Validate guess (5 letters)
+      if (guess.length !== 5 || !/^[A-Z]+$/.test(guess)) {
+        socket.emit("error", { message: "Invalid guess. Must be 5 letters." });
+        return;
       }
 
-      // If game is not over, send updated state to all players
-      if (!room.gameOver) {
+      // Check if player already has 6 guesses (re-check after lock)
+      const currentGuesses = room.playerGuesses.get(socket.id) || [];
+      if (currentGuesses.length >= 6) {
+        socket.emit("error", {
+          message: "You have already used all 6 guesses.",
+        });
+        return;
+      }
+
+      // Validate word exists
+      const isValid = await isValidWord(guess);
+      if (!isValid) {
+        socket.emit("error", { message: "Not in dictionary" });
+        return;
+      }
+
+      // Get fresh references to player data (in case room state changed during validation)
+      const playerGuesses = room.playerGuesses.get(socket.id) || [];
+      const playerGuessStates = room.playerGuessStates.get(socket.id) || [];
+
+      // Final check - ensure we still haven't exceeded 6 guesses
+      if (playerGuesses.length >= 6) {
+        socket.emit("error", {
+          message: "You have already used all 6 guesses.",
+        });
+        return;
+      }
+
+      // Add guess to player's history
+      const newPlayerGuesses = [...playerGuesses, guess];
+      const evaluation = evaluateGuess(guess, room.word);
+      const newPlayerGuessStates = [...playerGuessStates, evaluation];
+
+      room.playerGuesses.set(socket.id, newPlayerGuesses);
+      room.playerGuessStates.set(socket.id, newPlayerGuessStates);
+
+      console.log(
+        `Player ${socket.id} guessed "${guess}" for word "${room.word}"`
+      );
+
+      // Check if guess is correct
+      const isCorrect = evaluation.every((state) => state === "correct");
+
+      if (isCorrect) {
+        // Game over - this player wins
+        room.gameOver = true;
+        room.winner = socket.id;
+
+        // Send game over event to all players with full game state
         room.players.forEach((playerId) => {
           const playerSocket = io.sockets.sockets.get(playerId);
           if (playerSocket) {
             const gameState = createGameStateForPlayer(room, playerId);
-            playerSocket.emit("gameStateUpdate", gameState);
+            playerSocket.emit("gameOver", gameState);
           }
         });
+
+        console.log(`Game over in room ${room.id}. Winner: ${socket.id}`);
+      } else {
+        // Check if this player has used all 6 guesses
+        if (newPlayerGuesses.length >= 6) {
+          // Check if other player has also finished or used all guesses
+          const otherPlayer = room.players.find((p) => p !== socket.id);
+          const otherPlayerGuesses = room.playerGuesses.get(otherPlayer) || [];
+          const otherPlayerStates =
+            room.playerGuessStates.get(otherPlayer) || [];
+
+          // Check if other player won (FIXED: correct logic)
+          const otherPlayerWon = otherPlayerStates.some((guessStates) =>
+            guessStates.every((state) => state === "correct")
+          );
+
+          if (otherPlayerGuesses.length >= 6 || otherPlayerWon) {
+            // Both players finished - determine winner or tie
+            room.gameOver = true;
+
+            if (otherPlayerWon) {
+              room.winner = otherPlayer;
+            } else {
+              room.winner = null; // Tie
+            }
+
+            // Send game over event to all players
+            room.players.forEach((playerId) => {
+              const playerSocket = io.sockets.sockets.get(playerId);
+              if (playerSocket) {
+                const gameState = createGameStateForPlayer(room, playerId);
+                playerSocket.emit("gameOver", gameState);
+              }
+            });
+
+            console.log(
+              `Game over in room ${room.id}. Winner: ${room.winner || "Tie"}`
+            );
+          }
+        }
+
+        // If game is not over, send updated state to all players
+        if (!room.gameOver) {
+          room.players.forEach((playerId) => {
+            const playerSocket = io.sockets.sockets.get(playerId);
+            if (playerSocket) {
+              const gameState = createGameStateForPlayer(room, playerId);
+              playerSocket.emit("gameStateUpdate", gameState);
+            }
+          });
+        }
       }
+    } catch (error) {
+      console.error(`Error processing guess for player ${socket.id}:`, error);
+      socket.emit("error", { message: "Server error processing guess" });
+    } finally {
+      // Always release the lock
+      playerLocks.delete(socket.id);
     }
   });
 
@@ -464,6 +511,7 @@ io.on("connection", (socket) => {
       }
 
       players.delete(playerId);
+      playerLocks.delete(playerId); // Clean up any pending locks
     }
   }
 
